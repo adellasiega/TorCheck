@@ -145,10 +145,11 @@ class Atom(Node):
 
     def __str__(self) -> str:
         s: str = (
-                "x_"
+                "(x_"
                 + str(self.var_index)
-                + (" <= " if self.lte else " >= ")
+                + (" <= " if self.lte else " => ")
                 + str(round(self.threshold, 4))
+                + ")"
         )
         return s
 
@@ -186,7 +187,7 @@ class Not(Node):
         self.child: Node = child
 
     def __str__(self) -> str:
-        s: str = "not ( " + self.child.__str__() + " )"
+        s: str = "( \u00AC" + self.child.__str__() + " )"
         return s
 
     def time_depth(self) -> int:
@@ -213,7 +214,7 @@ class And(Node):
         s: str = (
                 "( "
                 + self.left_child.__str__()
-                + " and "
+                + " \u2227 "
                 + self.right_child.__str__()
                 + " )"
         )
@@ -253,7 +254,7 @@ class Or(Node):
         s: str = (
                 "( "
                 + self.left_child.__str__()
-                + " or "
+                + " \u2228 "
                 + self.right_child.__str__()
                 + " )"
         )
@@ -301,16 +302,22 @@ class Globally(Node):
         self.right_time_bound: int = right_time_bound + 1
         self.adapt_unbound: bool = adapt_unbound
 
+        if self.unbound and self.right_unbound:
+            raise ValueError("Cannot set both unbound=True and right_unbound=True")
+        if (self.unbound is False) and (self.right_unbound is False) and \
+                (self.right_time_bound <= self.left_time_bound):
+            raise ValueError("Temporal thresholds are incorrect: right parameter is not higher than left parameter")
+
     def __str__(self) -> str:
         s_left = "[" + str(self.left_time_bound) + ","
-        s_right = str(self.right_time_bound) if not self.right_unbound else "inf"
+        s_right = str(self.right_time_bound - 1) if not self.right_unbound else "inf"
         s0: str = s_left + s_right + "]" if not self.unbound else ""
-        s: str = "always" + s0 + " ( " + self.child.__str__() + " )"
+        s: str = "( G" + s0 + self.child.__str__() + " )"
         return s
 
     def time_depth(self) -> int:
         if self.unbound:
-            return self.child.time_depth()
+            return self.child.time_depth() + self.left_time_bound
         elif self.right_unbound:
             return self.child.time_depth() + self.left_time_bound
         else:
@@ -332,7 +339,7 @@ class Globally(Node):
                 _: Tensor
                 z, _ = torch.min(z1, 2, keepdim=True)
         else:
-            z: Tensor = torch.ge(1.0 - eventually((~z1).double(), self.right_time_bound - self.left_time_bound), 0.5)
+            z: Tensor = eventually((~z1).float(), self.right_time_bound - self.left_time_bound) < 0.5
         return z
 
     def _quantitative(self, x: Tensor, normalize: bool = False) -> Tensor:
@@ -373,21 +380,23 @@ class Eventually(Node):
         self.right_time_bound: int = right_time_bound + 1
         self.adapt_unbound: bool = adapt_unbound
 
+        if self.unbound and self.right_unbound:
+            raise ValueError("Cannot set both unbound=True and right_unbound=True")
         if (self.unbound is False) and (self.right_unbound is False) and \
                 (self.right_time_bound <= self.left_time_bound):
-            raise ValueError("Temporal thresholds are incorrect: right parameter is higher than left parameter")
+            raise ValueError("Temporal thresholds are incorrect: right parameter is not higher than left parameter")
 
     def __str__(self) -> str:
         s_left = "[" + str(self.left_time_bound) + ","
-        s_right = str(self.right_time_bound) if not self.right_unbound else "inf"
+        s_right = str(self.right_time_bound - 1) if not self.right_unbound else "inf"
         s0: str = s_left + s_right + "]" if not self.unbound else ""
-        s: str = "eventually" + s0 + " ( " + self.child.__str__() + " )"
+        s: str = "( F" + s0 + self.child.__str__() + " )"
         return s
 
     # TODO: coherence between computation of time depth and time span given when computing eventually 1d
     def time_depth(self) -> int:
         if self.unbound:
-            return self.child.time_depth()
+            return self.child.time_depth() + self.left_time_bound
         elif self.right_unbound:
             return self.child.time_depth() + self.left_time_bound
         else:
@@ -408,7 +417,7 @@ class Eventually(Node):
                 _: Tensor
                 z, _ = torch.max(z1, 2, keepdim=True)
         else:
-            z: Tensor = torch.ge(eventually(z1.double(), self.right_time_bound - self.left_time_bound), 0.5)
+            z: Tensor = eventually(z1.float(), self.right_time_bound - self.left_time_bound) >= 0.5
         return z
 
     def _quantitative(self, x: Tensor, normalize: bool = False) -> Tensor:
@@ -441,6 +450,7 @@ class Until(Node):
             right_unbound: bool = False,
             left_time_bound: int = 0,
             right_time_bound: int = 1,
+            adapt_unbound: bool = True,
     ) -> None:
         super().__init__()
         self.left_child: Node = left_child
@@ -449,16 +459,19 @@ class Until(Node):
         self.right_unbound: bool = right_unbound
         self.left_time_bound: int = left_time_bound
         self.right_time_bound: int = right_time_bound + 1
+        self.adapt_unbound: bool = adapt_unbound
 
+        if self.unbound and self.right_unbound:
+            raise ValueError("Cannot set both unbound=True and right_unbound=True")
         if (self.unbound is False) and (self.right_unbound is False) and \
                 (self.right_time_bound <= self.left_time_bound):
-            raise ValueError("Temporal thresholds are incorrect: right parameter is higher than left parameter")
+            raise ValueError("Temporal thresholds are incorrect: right parameter is not higher than left parameter")
 
     def __str__(self) -> str:
         s_left = "[" + str(self.left_time_bound) + ","
-        s_right = str(self.right_time_bound) if not self.right_unbound else "inf"
+        s_right = str(self.right_time_bound - 1) if not self.right_unbound else "inf"
         s0: str = s_left + s_right + "]" if not self.unbound else ""
-        s: str = "( " + self.left_child.__str__() + " until" + s0 + " " + self.right_child.__str__() + " )"
+        s: str = "( " + self.left_child.__str__() + " U" + s0 + " " + self.right_child.__str__() + " )"
         return s
 
     def time_depth(self) -> int:
@@ -468,78 +481,82 @@ class Until(Node):
         elif self.right_unbound:
             return sum_children_depth + self.left_time_bound
         else:
-            # diff = torch.le(torch.tensor([self.left_time_bound]), 0).float()
             return sum_children_depth + self.right_time_bound - 1
-            # (self.right_time_bound - self.left_time_bound + 1) - diff
+
+    def _build_until_matrix(self, z1: Tensor, z2: Tensor, size: int):
+        """Build z1_def (cumulative-min matrix) and z2_def for Until semantics.
+
+        z1_def[t, s] = min_{k in [t,s]} z1[k]  for s >= t
+        z2_def[t, s] = z2[s]                    for s >= t
+        (entries for s < t are filled with z1[t]/z2[t] respectively but are
+        masked out by the callers before taking the final max/any.)
+        """
+        z1_rep = torch.repeat_interleave(z1.unsqueeze(2), size, 2)
+        z1_tril = torch.tril(z1_rep.transpose(2, 3), diagonal=-1)
+        z1_triu = torch.triu(z1_rep)
+        z1_def: Tensor = torch.cummin(z1_tril + z1_triu, dim=3)[0]
+
+        z2_rep = torch.repeat_interleave(z2.unsqueeze(2), size, 2)
+        z2_tril = torch.tril(z2_rep.transpose(2, 3), diagonal=-1)
+        z2_triu = torch.triu(z2_rep)
+        z2_def: Tensor = z2_tril + z2_triu
+        return z1_def, z2_def
+
+    def _band_mask(self, size: int, device) -> Tensor:
+        """Return a (1,1,T,T) boolean mask selecting columns s where
+        left_time_bound <= s-t (and s-t <= right_time_bound-1 for bounded)."""
+        idx = torch.arange(size, device=device)
+        diff = idx.view(1, -1) - idx.view(-1, 1)  # (T, T): diff[t,s] = s - t
+        band = diff >= self.left_time_bound
+        if not self.right_unbound:
+            band = band & (diff <= self.right_time_bound - 1)
+        return band.view(1, 1, size, size)
 
     def _boolean(self, x: Tensor) -> Tensor:
-        if self.unbound:
-            z1: Tensor = self.left_child._boolean(x)
-            z2: Tensor = self.right_child._boolean(x)
-            size: int = min(z1.size()[2], z2.size()[2])
-            z1: Tensor = z1[:, :, :size]
-            z2: Tensor = z2[:, :, :size]
-            z1_rep = torch.repeat_interleave(z1.unsqueeze(2), z1.unsqueeze(2).shape[-1], 2)
-            z1_tril = torch.tril(z1_rep.transpose(2, 3), diagonal=-1)
-            z1_triu = torch.triu(z1_rep)
-            z1_def = torch.cummin(z1_tril + z1_triu, dim=3)[0]
+        z1: Tensor = self.left_child._boolean(x)
+        z2: Tensor = self.right_child._boolean(x)
+        size: int = min(z1.size()[2], z2.size()[2])
+        z1 = z1[:, :, :size]
+        z2 = z2[:, :, :size]
 
-            z2_rep = torch.repeat_interleave(z2.unsqueeze(2), z2.unsqueeze(2).shape[-1], 2)
-            z2_tril = torch.tril(z2_rep.transpose(2, 3), diagonal=-1)
-            z2_triu = torch.triu(z2_rep)
-            z2_def = z2_tril + z2_triu
-            z: Tensor = torch.max(torch.min(torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1)[0],
-                                  dim=-1)[0]
-        elif self.right_unbound:
-            timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, right_unbound=True,
-                                                   left_time_bound=self.left_time_bound),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_unbound=True)))
-            z: Tensor = timed_until._boolean(x)
+        z1_def, z2_def = self._build_until_matrix(z1, z2, size)
+        inner: Tensor = torch.min(
+            torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1
+        )[0]  # (N, 1, T, T)
+
+        if self.unbound:
+            z: Tensor = torch.max(inner, dim=-1)[0]
+            if not self.adapt_unbound:
+                z = z.max(dim=2, keepdim=True)[0]
         else:
-            timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, left_time_bound=self.left_time_bound,
-                                                   right_time_bound=self.right_time_bound - 1),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_unbound=True)))
-            z: Tensor = timed_until._boolean(x)
+            band: Tensor = self._band_mask(size, z1.device)
+            # Zero out out-of-band entries, then check if any valid entry is satisfied
+            z = (inner * band.long()).bool().any(dim=-1)
         return z
 
     def _quantitative(self, x: Tensor, normalize: bool = False) -> Tensor:
+        z1: Tensor = self.left_child._quantitative(x, normalize)
+        z2: Tensor = self.right_child._quantitative(x, normalize)
+        size: int = min(z1.size()[2], z2.size()[2])
+        z1 = z1[:, :, :size]
+        z2 = z2[:, :, :size]
+
+        z1_def, z2_def = self._build_until_matrix(z1, z2, size)
+        inner: Tensor = torch.min(
+            torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1
+        )[0]  # (N, 1, T, T)
+
         if self.unbound:
-            z1: Tensor = self.left_child._quantitative(x, normalize)
-            z2: Tensor = self.right_child._quantitative(x, normalize)
-            size: int = min(z1.size()[2], z2.size()[2])
-            z1: Tensor = z1[:, :, :size]
-            z2: Tensor = z2[:, :, :size]
-
-            z1_rep = torch.repeat_interleave(z1.unsqueeze(2), z1.unsqueeze(2).shape[-1], 2)
-            z1_tril = torch.tril(z1_rep.transpose(2, 3), diagonal=-1)
-            z1_triu = torch.triu(z1_rep)
-            z1_def = torch.cummin(z1_tril + z1_triu, dim=3)[0]
-
-            z2_rep = torch.repeat_interleave(z2.unsqueeze(2), z2.unsqueeze(2).shape[-1], 2)
-            z2_tril = torch.tril(z2_rep.transpose(2, 3), diagonal=-1)
-            z2_triu = torch.triu(z2_rep)
-            z2_def = z2_tril + z2_triu
-            z: Tensor = torch.max(torch.min(torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1)[0],
-                                  dim=-1)[0]
-            # z: Tensor = torch.cat([torch.max(torch.min(
-            #    torch.cat([torch.cummin(z1[:, :, t:].unsqueeze(-1), dim=2)[0], z2[:, :, t:].unsqueeze(-1)], dim=-1),
-            #    dim=-1)[0], dim=2, keepdim=True)[0] for t in range(size)], dim=2)
-        elif self.right_unbound:
-            timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, right_unbound=True,
-                                                   left_time_bound=self.left_time_bound),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_unbound=True)))
-            z: Tensor = timed_until._quantitative(x, normalize=normalize)
+            z: Tensor = torch.max(inner, dim=-1)[0]
+            if not self.adapt_unbound:
+                z = z.max(dim=2, keepdim=True)[0]
         else:
-            timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, left_time_bound=self.left_time_bound,
-                                                   right_time_bound=self.right_time_bound - 1),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_unbound=True)))
-            z: Tensor = timed_until._quantitative(x, normalize=normalize)
+            band: Tensor = self._band_mask(size, z1.device)
+            inner = inner.masked_fill(~band, float('-inf'))
+            z = torch.max(inner, dim=-1)[0]
+            # Truncate to time points where the band has at least one valid entry:
+            # t is valid iff t + left_time_bound < size, giving size - left_time_bound rows.
+            # This mirrors how G[a,b] and F[a,b] truncate their output traces.
+            valid_len = max(0, size - self.left_time_bound)
+            z = z[:, :, :valid_len]
         return z

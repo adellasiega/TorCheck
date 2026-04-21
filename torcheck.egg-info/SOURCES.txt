@@ -1,0 +1,11 @@
+README.md
+setup.py
+tests/test_simplify.py
+torcheck/__init__.py
+torcheck/simplify.py
+torcheck/stl.py
+torcheck.egg-info/PKG-INFO
+torcheck.egg-info/SOURCES.txt
+torcheck.egg-info/dependency_links.txt
+torcheck.egg-info/requires.txt
+torcheck.egg-info/top_level.txt

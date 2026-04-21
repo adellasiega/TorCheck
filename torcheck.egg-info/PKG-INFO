@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: torcheck
+Version: 0.1
+Summary: Torch implementation for STL monitoring
+Home-page: https://github.com/ailab-units/Feat2Vec
+License: GPLv3
+Requires-Dist: torch
+Dynamic: description
+Dynamic: home-page
+Dynamic: license
+Dynamic: requires-dist
+Dynamic: summary
+
+# `TorCheck` 🔥✅
+A fully-differentiable implementation of Signal Temporal Logic semantic trees based on PyTorch
+
+## Install
+```console
+pip install git+https://github.com/ailab-units/TorCheck.git
+```
