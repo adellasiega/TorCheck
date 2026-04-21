@@ -125,6 +125,19 @@ def _apply_rules(node: Node) -> Node:
     # Proof: -max(a,b) = min(-a,-b)
     if isinstance(node, Not) and isinstance(node.child, Or):
         return And(Not(node.child.left_child), Not(node.child.right_child))
+    
+    # Distributivity: (φ ∧ ψ) ∨ (φ ∧ χ) → φ ∧ (ψ ∨ χ)
+    # Proof: max(min(a,b), min(a,c)) = min(a, max(b,c))
+    if isinstance(node, Or) and isinstance(l, And) and isinstance(r, And):
+        if _structurally_equal(l.left_child, r.left_child):
+            return And(l.left_child, Or(l.right_child, r.right_child))
+        if _structurally_equal(l.right_child, r.right_child):
+            return And(Or(l.left_child, r.left_child), l.right_child)
+        if _structurally_equal(l.left_child, r.right_child):
+            return And(l.left_child, Or(l.right_child, r.left_child))
+        if _structurally_equal(l.right_child, r.left_child):
+            return And(l.right_child, Or(l.left_child, r.right_child))
+    
 
     # Temporal negation: ¬G[a,b] φ → F[a,b] ¬φ
     # Proof: -min_{[a,b]} rho(φ) = max_{[a,b]} -rho(φ) = max_{[a,b]} rho(¬φ)
