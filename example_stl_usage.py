@@ -10,8 +10,8 @@ signal1 = torch.randn(1, 2, 100)
 print(signal1.shape)
 
 # phi(x) = x1>1 and globally[0,4] x2<2
-n0 = stl.Atom(var_index=0, threshold=1, lte=False)  # lte = False is >
-n1 = stl.Atom(var_index=1, threshold=2, lte=True)  # lte = True is <
+n0 = stl.Atom(var_index=0, threshold=1, lte=False)  # lte = False is >=
+n1 = stl.Atom(var_index=1, threshold=2, lte=True)  # lte = True is <=
 ng = stl.Globally(n1, left_time_bound=2, right_time_bound=4)
 phi = stl.And(n0, ng)
 

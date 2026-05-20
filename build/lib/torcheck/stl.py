@@ -104,10 +104,6 @@ class Node:
         torch.Tensor
         A tensor with the quantitative semantics for the node.
         """
-        if not evaluate_at_all_times:
-            needed = self._signal_depth_for_t0()
-            if needed != float('inf') and needed + 1 < x.size(2):
-                x = x[:, :, :needed + 1]
         z: Tensor = self._quantitative(x, normalize)
         if evaluate_at_all_times:
             return z
@@ -123,15 +119,6 @@ class Node:
     def time_depth(self) -> int:
         """Returns time depth of bounded temporal operators only."""
         # Must be overloaded.
-
-    def _signal_depth_for_t0(self) -> Union[int, float]:
-        """Steps of signal needed to evaluate at t=0.
-
-        Returns float('inf') if the sub-formula contains an unbound temporal
-        operator (whose semantics depends on the whole trace).  Otherwise
-        equals time_depth().
-        """
-        return self.time_depth()
 
     def _quantitative(self, x: Tensor, normalize: bool = False) -> Tensor:
         """Private method equivalent to public one for inner call."""
@@ -206,9 +193,6 @@ class Not(Node):
     def time_depth(self) -> int:
         return self.child.time_depth()
 
-    def _signal_depth_for_t0(self) -> Union[int, float]:
-        return self.child._signal_depth_for_t0()
-
     def _boolean(self, x: Tensor) -> Tensor:
         z: Tensor = ~self.child._boolean(x)
         return z
@@ -238,10 +222,6 @@ class And(Node):
 
     def time_depth(self) -> int:
         return max(self.left_child.time_depth(), self.right_child.time_depth())
-
-    def _signal_depth_for_t0(self) -> Union[int, float]:
-        return max(self.left_child._signal_depth_for_t0(),
-                   self.right_child._signal_depth_for_t0())
 
     def _boolean(self, x: Tensor) -> Tensor:
         z1: Tensor = self.left_child._boolean(x)
@@ -282,10 +262,6 @@ class Or(Node):
 
     def time_depth(self) -> int:
         return max(self.left_child.time_depth(), self.right_child.time_depth())
-
-    def _signal_depth_for_t0(self) -> Union[int, float]:
-        return max(self.left_child._signal_depth_for_t0(),
-                   self.right_child._signal_depth_for_t0())
 
     def _boolean(self, x: Tensor) -> Tensor:
         z1: Tensor = self.left_child._boolean(x)
@@ -348,11 +324,6 @@ class Globally(Node):
             # diff = torch.le(torch.tensor([self.left_time_bound]), 0).float()
             return self.child.time_depth() + self.right_time_bound - 1
             # (self.right_time_bound - self.left_time_bound + 1) - diff
-
-    def _signal_depth_for_t0(self) -> Union[int, float]:
-        if self.unbound or self.right_unbound:
-            return float('inf')
-        return self.child._signal_depth_for_t0() + self.right_time_bound - 1
 
     def _boolean(self, x: Tensor) -> Tensor:
         z1: Tensor = self.child._boolean(x[:, :, self.left_time_bound:])  # nested temporal parameters
@@ -433,11 +404,6 @@ class Eventually(Node):
             return self.child.time_depth() + self.right_time_bound - 1
             # (self.right_time_bound - self.left_time_bound + 1) - diff
 
-    def _signal_depth_for_t0(self) -> Union[int, float]:
-        if self.unbound or self.right_unbound:
-            return float('inf')
-        return self.child._signal_depth_for_t0() + self.right_time_bound - 1
-
     def _boolean(self, x: Tensor) -> Tensor:
         z1: Tensor = self.child._boolean(x[:, :, self.left_time_bound:])
         if self.unbound or self.right_unbound:
@@ -517,13 +483,6 @@ class Until(Node):
         else:
             return sum_children_depth + self.right_time_bound - 1
 
-    def _signal_depth_for_t0(self) -> Union[int, float]:
-        if self.unbound or self.right_unbound:
-            return float('inf')
-        return (self.left_child._signal_depth_for_t0() +
-                self.right_child._signal_depth_for_t0() +
-                self.right_time_bound - 1)
-
     def _build_until_matrix(self, z1: Tensor, z2: Tensor, size: int):
         """Build z1_def (cumulative-min matrix) and z2_def for Until semantics.
 
@@ -582,81 +541,22 @@ class Until(Node):
         z1 = z1[:, :, :size]
         z2 = z2[:, :, :size]
 
-        if self.unbound:
-            return self._quantitative_unbound(z1, z2)
+        z1_def, z2_def = self._build_until_matrix(z1, z2, size)
+        inner: Tensor = torch.min(
+            torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1
+        )[0]  # (N, 1, T, T)
 
-        if self.right_unbound:
-            # right_unbound: no upper bound — fall back to matrix method
-            z1_def, z2_def = self._build_until_matrix(z1, z2, size)
-            inner: Tensor = torch.min(
-                torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1
-            )[0]
+        if self.unbound:
+            z: Tensor = torch.max(inner, dim=-1)[0]
+            if not self.adapt_unbound:
+                z = z.max(dim=2, keepdim=True)[0]
+        else:
             band: Tensor = self._band_mask(size, z1.device)
             inner = inner.masked_fill(~band, float('-inf'))
-            z: Tensor = torch.max(inner, dim=-1)[0]
+            z = torch.max(inner, dim=-1)[0]
+            # Truncate to time points where the band has at least one valid entry:
+            # t is valid iff t + left_time_bound < size, giving size - left_time_bound rows.
+            # This mirrors how G[a,b] and F[a,b] truncate their output traces.
             valid_len = max(0, size - self.left_time_bound)
-            return z[:, :, :valid_len]
-
-        return self._quantitative_bounded(z1, z2)
-
-    def _quantitative_bounded(self, z1: Tensor, z2: Tensor) -> Tensor:
-        """O(T * W) bounded Until via unfold + cummin.
-
-        Computes result[t] = max_{d=a}^{b} min(min_{k=t}^{t+d} z1[k], z2[t+d])
-        using sliding windows instead of a full T×T matrix.
-        """
-        a: int = self.left_time_bound
-        b: int = self.right_time_bound - 1
-        W: int = b - a + 1
-        size: int = z1.size(2)
-
-        valid_len: int = max(0, size - a)
-        if valid_len == 0 or W <= 0:
-            return torch.full((z1.size(0), z1.size(1), valid_len),
-                              float('-inf'), device=z1.device, dtype=z1.dtype)
-
-        # Pad z1 with +inf (neutral for min), z2 with -inf (masks out-of-range witnesses)
-        inf_pos = torch.full((*z1.shape[:2], b), float('inf'), device=z1.device, dtype=z1.dtype)
-        inf_neg = torch.full((*z2.shape[:2], b), float('-inf'), device=z2.device, dtype=z2.dtype)
-        z1_p: Tensor = torch.cat([z1, inf_pos], dim=2)
-        z2_p: Tensor = torch.cat([z2, inf_neg], dim=2)
-
-        # rolling min of length (a+1): min_{k=t}^{t+a} z1_p[k]
-        roll_a: Tensor = -F.max_pool1d(-z1_p, kernel_size=a + 1, stride=1)
-
-        if W == 1:
-            prefix: Tensor = roll_a[:, :, :valid_len]
-            z2_at: Tensor = z2_p[:, :, a: a + valid_len]
-            return torch.minimum(prefix, z2_at)
-
-        # tail_w[t, k] = z1_p[t+a+1+k]  for k in [0, W-2], t in [0, valid_len-1]
-        tail: Tensor = z1_p[:, :, a + 1:]
-        tail_w: Tensor = tail.unfold(2, W - 1, 1)[:, :, :valid_len, :]
-        tail_cm: Tensor = torch.cummin(tail_w, dim=-1)[0]
-
-        prefix_exp: Tensor = roll_a[:, :, :valid_len].unsqueeze(-1)
-        full_cm: Tensor = torch.cat(
-            [prefix_exp, torch.minimum(prefix_exp, tail_cm)], dim=-1
-        )  # (N, C, valid_len, W)
-
-        # z2_w[t, j] = z2_p[t+a+j]
-        z2_w: Tensor = z2_p[:, :, a:].unfold(2, W, 1)[:, :, :valid_len, :]
-
-        return torch.max(torch.minimum(full_cm, z2_w), dim=-1)[0]
-
-    def _quantitative_unbound(self, z1: Tensor, z2: Tensor) -> Tensor:
-        """O(T) unbound Until via backward scan.
-
-        Recurrence: M[t] = min(z1[t], max(z2[t], M[t+1]))  with M[T] = -inf
-        """
-        T: int = z1.size(2)
-        result: Tensor = torch.empty_like(z1)
-        result[:, :, T - 1] = torch.minimum(z1[:, :, T - 1], z2[:, :, T - 1])
-        for t in range(T - 2, -1, -1):
-            result[:, :, t] = torch.minimum(
-                z1[:, :, t],
-                torch.maximum(z2[:, :, t], result[:, :, t + 1])
-            )
-        if not self.adapt_unbound:
-            result = result.max(dim=2, keepdim=True)[0]
-        return result
+            z = z[:, :, :valid_len]
+        return z
