@@ -1,6 +1,7 @@
 README.md
 setup.py
 tests/test_simplify.py
+tests/test_stl.py
 torcheck/__init__.py
 torcheck/simplify.py
 torcheck/stl.py

@@ -313,3 +313,42 @@ class TestUntilVsReference:
         z2 = stl.Atom(1, 0.0)._quantitative(x)
         z_ref = self._reference_unbound(z1, z2)
         assert torch.allclose(z_fast, z_ref, atol=1e-5)
+
+    @staticmethod
+    def _reference_right_unbound(z1, z2, a):
+        """O(T^2) transcription of  max_{d >= a} min(min_{k in [t,t+d]} z1, z2[t+d])."""
+        N, C, T = z1.shape
+        valid_len = max(0, T - a)
+        result = torch.full((N, C, valid_len), float("-inf"))
+        for t in range(valid_len):
+            for s in range(t + a, T):
+                cmin = z1[:, :, t:s + 1].min(dim=2)[0]
+                result[:, :, t] = torch.maximum(
+                    result[:, :, t], torch.minimum(cmin, z2[:, :, s])
+                )
+        return result
+
+    @pytest.mark.parametrize("a", [0, 1, 2, 5, 19])
+    def test_right_unbound_matches_reference(self, a):
+        torch.manual_seed(11)
+        x = torch.randn(4, 2, 20)
+        phi = stl.Until(stl.Atom(0, 0.0), stl.Atom(1, 0.0),
+                        right_unbound=True, left_time_bound=a)
+        z_fast = phi.quantitative(x, evaluate_at_all_times=True)
+
+        z1 = stl.Atom(0, 0.0)._quantitative(x)
+        z2 = stl.Atom(1, 0.0)._quantitative(x)
+        z_ref = self._reference_right_unbound(z1, z2, a)
+
+        assert z_fast.shape == z_ref.shape
+        assert torch.allclose(z_fast, z_ref, atol=1e-5), \
+            f"U[{a},inf) mismatch: max diff {(z_fast - z_ref).abs().max():.2e}"
+
+    def test_right_unbound_is_linear_in_memory(self):
+        """The old matrix form allocated (N, C, T, T); this must not regress."""
+        phi = stl.Until(stl.Atom(0, 0.0), stl.Atom(1, 0.0),
+                        right_unbound=True, left_time_bound=3)
+        x = torch.randn(8, 2, 4000)  # (N,C,T,T) here would be ~512 GB
+        z = phi.quantitative(x, evaluate_at_all_times=False)
+        assert z.shape == (8,)
+        assert torch.isfinite(z).all()

@@ -586,16 +586,7 @@ class Until(Node):
             return self._quantitative_unbound(z1, z2)
 
         if self.right_unbound:
-            # right_unbound: no upper bound — fall back to matrix method
-            z1_def, z2_def = self._build_until_matrix(z1, z2, size)
-            inner: Tensor = torch.min(
-                torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1
-            )[0]
-            band: Tensor = self._band_mask(size, z1.device)
-            inner = inner.masked_fill(~band, float('-inf'))
-            z: Tensor = torch.max(inner, dim=-1)[0]
-            valid_len = max(0, size - self.left_time_bound)
-            return z[:, :, :valid_len]
+            return self._quantitative_right_unbound(z1, z2)
 
         return self._quantitative_bounded(z1, z2)
 
@@ -644,10 +635,12 @@ class Until(Node):
 
         return torch.max(torch.minimum(full_cm, z2_w), dim=-1)[0]
 
-    def _quantitative_unbound(self, z1: Tensor, z2: Tensor) -> Tensor:
-        """O(T) unbound Until via backward scan.
+    @staticmethod
+    def _until_backward_scan(z1: Tensor, z2: Tensor) -> Tensor:
+        """O(T) untimed-Until backward scan.
 
-        Recurrence: M[t] = min(z1[t], max(z2[t], M[t+1]))  with M[T] = -inf
+        M[t] = max_{e >= t} min(min_{k in [t,e]} z1[k], z2[e]), computed by the
+        recurrence M[t] = min(z1[t], max(z2[t], M[t+1])) with M[T] = -inf.
         """
         T: int = z1.size(2)
         result: Tensor = torch.empty_like(z1)
@@ -657,6 +650,39 @@ class Until(Node):
                 z1[:, :, t],
                 torch.maximum(z2[:, :, t], result[:, :, t + 1])
             )
+        return result
+
+    def _quantitative_unbound(self, z1: Tensor, z2: Tensor) -> Tensor:
+        """O(T) unbound Until via backward scan."""
+        result: Tensor = self._until_backward_scan(z1, z2)
         if not self.adapt_unbound:
             result = result.max(dim=2, keepdim=True)[0]
         return result
+
+    def _quantitative_right_unbound(self, z1: Tensor, z2: Tensor) -> Tensor:
+        """O(T) right-unbounded Until, i.e. phi U_[a, inf) psi.
+
+        result[t] = max_{d >= a} min(min_{k in [t,t+d]} z1[k], z2[t+d])
+
+        which factors into a rolling min of z1 over the prefix [t, t+a] and an
+        untimed Until starting at t+a.  Replaces a (N, C, T, T) matrix with two
+        O(T) passes; the matrix form is quadratic in memory and OOMs on long
+        signals (e.g. 165 GB at N=128, T=17984).
+        """
+        a: int = self.left_time_bound
+        size: int = z1.size(2)
+        valid_len: int = max(0, size - a)
+        if valid_len == 0:
+            return torch.full((z1.size(0), z1.size(1), 0),
+                              float('-inf'), device=z1.device, dtype=z1.dtype)
+
+        tail: Tensor = self._until_backward_scan(z1, z2)
+        if a == 0:
+            return tail[:, :, :valid_len]
+
+        # min_{k in [t, t+a]} z1[k]; pad with +inf, the neutral element for min.
+        inf_pos = torch.full((*z1.shape[:2], a), float('inf'),
+                             device=z1.device, dtype=z1.dtype)
+        z1_p: Tensor = torch.cat([z1, inf_pos], dim=2)
+        prefix: Tensor = -F.max_pool1d(-z1_p, kernel_size=a + 1, stride=1)
+        return torch.minimum(prefix[:, :, :valid_len], tail[:, :, a:a + valid_len])
