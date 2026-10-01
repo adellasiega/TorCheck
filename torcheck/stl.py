@@ -490,17 +490,13 @@ class Until(Node):
                                   dim=-1)[0]
         elif self.right_unbound:
             timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, right_unbound=True,
-                                                   left_time_bound=self.left_time_bound),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_unbound=True)))
+                                    And(Eventually(self.right_child, right_unbound=True, left_time_bound=self.left_time_bound),
+                                        Eventually(Until(self.left_child, self.right_child, unbound=True), left_time_bound=self.left_time_bound, right_time_bound=self.left_time_bound)))
             z: Tensor = timed_until._boolean(x)
         else:
             timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, left_time_bound=self.left_time_bound,
-                                                   right_time_bound=self.right_time_bound - 1),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_unbound=True)))
+                                    And(Eventually(self.right_child, left_time_bound=self.left_time_bound, right_time_bound=self.right_time_bound - 1),
+                                        Eventually(Until(self.left_child, self.right_child, unbound=True), left_time_bound=self.left_time_bound, right_time_bound=self.left_time_bound)))
             z: Tensor = timed_until._boolean(x)
         return z
 
@@ -531,13 +527,13 @@ class Until(Node):
                                     And(Eventually(self.right_child, right_unbound=True,
                                                    left_time_bound=self.left_time_bound),
                                         Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_unbound=True)))
+                                                   left_time_bound=self.left_time_bound, right_time_bound=self.left_time_bound)))
             z: Tensor = timed_until._quantitative(x, normalize=normalize)
         else:
             timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
                                     And(Eventually(self.right_child, left_time_bound=self.left_time_bound,
                                                    right_time_bound=self.right_time_bound - 1),
                                         Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_unbound=True)))
+                                                   left_time_bound=self.left_time_bound, right_time_bound=self.left_time_bound)))
             z: Tensor = timed_until._quantitative(x, normalize=normalize)
         return z
