@@ -212,9 +212,9 @@ class And(Node):
     def __str__(self) -> str:
         s: str = (
                 "( "
-                + self.left_child.__str__()
+                + self.left_child.__str__() + " )"
                 + " and "
-                + self.right_child.__str__()
+                + "( " + self.right_child.__str__()
                 + " )"
         )
         return s
@@ -251,11 +251,9 @@ class Or(Node):
 
     def __str__(self) -> str:
         s: str = (
-                "( "
-                + self.left_child.__str__()
+                "( " + self.left_child.__str__() + " )" 
                 + " or "
-                + self.right_child.__str__()
-                + " )"
+                + "( " + self.right_child.__str__() + " )"
         )
         return s
 
@@ -458,7 +456,7 @@ class Until(Node):
         s_left = "[" + str(self.left_time_bound) + ","
         s_right = str(self.right_time_bound) if not self.right_unbound else "inf"
         s0: str = s_left + s_right + "]" if not self.unbound else ""
-        s: str = "( " + self.left_child.__str__() + " until" + s0 + " " + self.right_child.__str__() + " )"
+        s: str = "( " + self.left_child.__str__() + " ) until" + s0 + " ( " + self.right_child.__str__() + " )"
         return s
 
     def time_depth(self) -> int:
