@@ -473,24 +473,24 @@ class Until(Node):
             # diff = torch.le(torch.tensor([self.left_time_bound]), 0).float()
             return max_children_depth + self.right_time_bound - 1
             # (self.right_time_bound - self.left_time_bound + 1) - diff
- 
+
     @staticmethod
     def _untimed_until(z1: Tensor, z2: Tensor) -> Tensor:
-            """z[t] = max_{t' >= t} min(z2[t'], min_{tt'' in [t,t')} z1[t''])"""
-            size: int = min(z1.size()[2], z2.size()[2])
-            z1: Tensor = z1[:, :, :size]
-            z2: Tensor = z2[:, :, :size]
-            inf = float("inf")
-            # upper[t,t'] is True iff t' >= t
-            upper = torch.ones(size, size, dtype=torch.bool, device=z1.device).triu()
-            # z1_cum[t,t'] = min z1[t...t'] for t' >= t (inf otherwise)
-            z1_mat = torch.where(upper, z1.unsqueeze(2).expand(-1, -1, size, -1), inf)
-            z1_cum = torch.cummin(z1_mat, dim=3)[0]
-            # shift by one: min z1[t..t'-1], inf when t' == t (phi not required at t')
-            z1_half = torch.cat([torch.full_like(z1_cum[..., :1], inf), z1_cum[..., :-1]], dim=3)
-            # z2_mat[t,t'] = z2[t'] for t' >= (-inf oterwise)
-            z2_mat = torch.where(upper, z2.unsqueeze(2).expand(-1, -1, size, -1), -inf)
-            return torch.max(torch.min(z1_half, z2_mat), dim=3)[0]
+        """z[t] = max_{t' >= t} min(z2[t'], min_{t'' in [t, t')} z1[t''])"""
+        size: int = min(z1.size()[2], z2.size()[2])
+        z1: Tensor = z1[:, :, :size]
+        z2: Tensor = z2[:, :, :size]
+        inf = float("inf")
+        # upper[t, t'] is True iff t' >= t
+        upper = torch.ones(size, size, dtype=torch.bool, device=z1.device).triu()
+        # z1_cum[t, t'] = min z1[t..t'] for t' >= t (+inf otherwise)
+        z1_mat = torch.where(upper, z1.unsqueeze(2).expand(-1, -1, size, -1), inf)
+        z1_cum = torch.cummin(z1_mat, dim=3)[0]
+        # shift by one: min z1[t..t'-1], +inf when t' == t (phi not required at t')
+        z1_half = torch.cat([torch.full_like(z1_cum[..., :1], inf), z1_cum[..., :-1]], dim=3)
+        # z2_mat[t, t'] = z2[t'] for t' >= t (-inf otherwise)
+        z2_mat = torch.where(upper, z2.unsqueeze(2).expand(-1, -1, size, -1), -inf)
+        return torch.max(torch.min(z1_half, z2_mat), dim=3)[0]
 
     def _timed_until(self) -> Node:
         a: int = self.left_time_bound
@@ -502,7 +502,6 @@ class Until(Node):
             f = And(Globally(self.left_child, left_time_bound=0, right_time_bound=a - 1), f)
         return f
 
- 
     def _boolean(self, x: Tensor) -> Tensor:
         if self.unbound:
             z1: Tensor = self.left_child._boolean(x).double()
