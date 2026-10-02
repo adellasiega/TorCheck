@@ -299,6 +299,10 @@ class Globally(Node):
         self.right_time_bound: int = right_time_bound + 1
         self.adapt_unbound: bool = adapt_unbound
 
+        if (self.unbound is False) and (self.right_unbound is False) and \
+                (self.right_time_bound <= self.left_time_bound):
+            raise ValueError("Temporal thresholds are incorrect: right parameter is higher than left parameter")
+
     def __str__(self) -> str:
         s_left = "[" + str(self.left_time_bound) + ","
         s_right = str(self.right_time_bound - 1) if not self.right_unbound else "inf"
