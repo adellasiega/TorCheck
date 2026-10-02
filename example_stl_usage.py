@@ -23,8 +23,8 @@ z1 = phi.quantitative(signal1)
 print(z1)
 
 # psi(x) = (x1>=1) until [0,4] (x2<=2)
-n0 = stl.Atom(var_index=0, threshold=1, lte=False)  # lte = False is >
-n1 = stl.Atom(var_index=1, threshold=2, lte=True)   # lte = True is <
+n0 = stl.Atom(var_index=0, threshold=1, lte=False)  # lte = False is >=
+n1 = stl.Atom(var_index=1, threshold=2, lte=True)   # lte = True is <=
 psi = stl.Until(n0, n1, left_time_bound=0, right_time_bound=4)
 print(psi)
 print(psi.boolean(signal1))
