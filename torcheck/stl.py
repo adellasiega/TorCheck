@@ -469,71 +469,50 @@ class Until(Node):
             # diff = torch.le(torch.tensor([self.left_time_bound]), 0).float()
             return sum_children_depth + self.right_time_bound - 1
             # (self.right_time_bound - self.left_time_bound + 1) - diff
-
-    def _boolean(self, x: Tensor) -> Tensor:
-        if self.unbound:
-            z1: Tensor = self.left_child._boolean(x)
-            z2: Tensor = self.right_child._boolean(x)
+ 
+    @staticmethod
+    def _untimed_until(z1: Tensor, z2: Tensor) -> Tensor:
+            """z[t] = max_{t' >= t} min(z2[t'], min_{tt'' in [t,t')} z1[t''])"""
             size: int = min(z1.size()[2], z2.size()[2])
             z1: Tensor = z1[:, :, :size]
             z2: Tensor = z2[:, :, :size]
-            z1_rep = torch.repeat_interleave(z1.unsqueeze(2), z1.unsqueeze(2).shape[-1], 2)
-            z1_tril = torch.tril(z1_rep.transpose(2, 3), diagonal=-1)
-            z1_triu = torch.triu(z1_rep)
-            z1_def = torch.cummin(z1_tril + z1_triu, dim=3)[0]
+            inf = float("inf")
+            # upper[t,t'] is True iff t' >= t
+            upper = torch.ones(size, size, dtype=torch.bool, device=z1.device).triu()
+            # z1_cum[t,t'] = min z1[t...t'] for t' >= t (inf otherwise)
+            z1_mat = torch.where(upper, z1.unsqueeze(2).expand(-1, -1, size, -1), inf)
+            z1_cum = torch.cummin(z1_mat, dim=3)[0]
+            # shift by one: min z1[t..t'-1], inf when t' == t (phi not required at t')
+            z1_half = torch.cat([torch.full_like(z1_cum[..., :1], inf), z1_cum[..., :-1]], dim=3)
+            # z2_mat[t,t'] = z2[t'] for t' >= (-inf oterwise)
+            z2_mat = torch.where(upper, z2.unsqueeze(2).expand(-1, -1, size, -1), -inf)
+            return torch.max(torch.min(z1_half, z2_mat), dim=3)[0]
 
-            z2_rep = torch.repeat_interleave(z2.unsqueeze(2), z2.unsqueeze(2).shape[-1], 2)
-            z2_tril = torch.tril(z2_rep.transpose(2, 3), diagonal=-1)
-            z2_triu = torch.triu(z2_rep)
-            z2_def = z2_tril + z2_triu
-            z: Tensor = torch.max(torch.min(torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1)[0],
-                                  dim=-1)[0]
-        elif self.right_unbound:
-            timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, right_unbound=True, left_time_bound=self.left_time_bound),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True), left_time_bound=self.left_time_bound, right_time_bound=self.left_time_bound)))
-            z: Tensor = timed_until._boolean(x)
+    def _timed_until(self) -> Node:
+        a: int = self.left_time_bound
+        f: Node = Eventually(Until(self.left_child, self.right_child, unbound=True),
+                             left_time_bound=a, right_time_bound=a)
+        if not self.right_unbound:
+            f = And(Eventually(self.right_child, left_time_bound=a, right_time_bound=self.right_time_bound - 1), f)
+        if a > 0:
+            f = And(Globally(self.left_child, left_time_bound=0, right_time_bound=a - 1), f)
+        return f
+
+ 
+    def _boolean(self, x: Tensor) -> Tensor:
+        if self.unbound:
+            z1: Tensor = self.left_child._boolean(x).double()
+            z2: Tensor = self.right_child._boolean(x).double()
+            z: Tensor = self._untimed_until(z1, z2) > 0.5
         else:
-            timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, left_time_bound=self.left_time_bound, right_time_bound=self.right_time_bound - 1),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True), left_time_bound=self.left_time_bound, right_time_bound=self.left_time_bound)))
-            z: Tensor = timed_until._boolean(x)
+            z: Tensor = self._timed_until()._boolean(x)
         return z
 
     def _quantitative(self, x: Tensor, normalize: bool = False) -> Tensor:
         if self.unbound:
             z1: Tensor = self.left_child._quantitative(x, normalize)
             z2: Tensor = self.right_child._quantitative(x, normalize)
-            size: int = min(z1.size()[2], z2.size()[2])
-            z1: Tensor = z1[:, :, :size]
-            z2: Tensor = z2[:, :, :size]
-
-            z1_rep = torch.repeat_interleave(z1.unsqueeze(2), z1.unsqueeze(2).shape[-1], 2)
-            z1_tril = torch.tril(z1_rep.transpose(2, 3), diagonal=-1)
-            z1_triu = torch.triu(z1_rep)
-            z1_def = torch.cummin(z1_tril + z1_triu, dim=3)[0]
-
-            z2_rep = torch.repeat_interleave(z2.unsqueeze(2), z2.unsqueeze(2).shape[-1], 2)
-            z2_tril = torch.tril(z2_rep.transpose(2, 3), diagonal=-1)
-            z2_triu = torch.triu(z2_rep)
-            z2_def = z2_tril + z2_triu
-            z: Tensor = torch.max(torch.min(torch.cat([z1_def.unsqueeze(-1), z2_def.unsqueeze(-1)], dim=-1), dim=-1)[0],
-                                  dim=-1)[0]
-            # z: Tensor = torch.cat([torch.max(torch.min(
-            #    torch.cat([torch.cummin(z1[:, :, t:].unsqueeze(-1), dim=2)[0], z2[:, :, t:].unsqueeze(-1)], dim=-1),
-            #    dim=-1)[0], dim=2, keepdim=True)[0] for t in range(size)], dim=2)
-        elif self.right_unbound:
-            timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, right_unbound=True,
-                                                   left_time_bound=self.left_time_bound),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_time_bound=self.left_time_bound)))
-            z: Tensor = timed_until._quantitative(x, normalize=normalize)
+            z: Tensor = self._untimed_until(z1, z2)
         else:
-            timed_until: Node = And(Globally(self.left_child, left_time_bound=0, right_time_bound=self.left_time_bound),
-                                    And(Eventually(self.right_child, left_time_bound=self.left_time_bound,
-                                                   right_time_bound=self.right_time_bound - 1),
-                                        Eventually(Until(self.left_child, self.right_child, unbound=True),
-                                                   left_time_bound=self.left_time_bound, right_time_bound=self.left_time_bound)))
-            z: Tensor = timed_until._quantitative(x, normalize=normalize)
+            z: Tensor = self._timed_until()._quantitative(x, normalize=normalize)
         return z
