@@ -464,14 +464,14 @@ class Until(Node):
         return s
 
     def time_depth(self) -> int:
-        sum_children_depth: int = self.left_child.time_depth() + self.right_child.time_depth()
+        max_children_depth: int = max(self.left_child.time_depth(), self.right_child.time_depth())
         if self.unbound:
-            return sum_children_depth
+            return max_children_depth
         elif self.right_unbound:
-            return sum_children_depth + self.left_time_bound
+            return max_children_depth + self.left_time_bound
         else:
             # diff = torch.le(torch.tensor([self.left_time_bound]), 0).float()
-            return sum_children_depth + self.right_time_bound - 1
+            return max_children_depth + self.right_time_bound - 1
             # (self.right_time_bound - self.left_time_bound + 1) - diff
  
     @staticmethod
